@@ -1,6 +1,6 @@
+
 import 'dart:async';
 import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:logging/logging.dart';
@@ -13,6 +13,7 @@ import 'package:saber/data/flavor_config.dart';
 import 'package:saber/data/sentry/sentry_consent.dart';
 import 'package:saber/data/tools/highlighter.dart';
 import 'package:saber/data/tools/pen.dart';
+import 'package:saber/data/tools/pen_preset.dart';
 import 'package:sbn/canvas_background_pattern.dart';
 import 'package:sbn/tool_id.dart';
 import 'package:stow/stow.dart';
@@ -300,6 +301,24 @@ class Stows {
       lastShapePenColor = PlainStow(
         'lastShapePenColor',
         Colors.black.toARGB32(),
+        volatile: !_isOnMainIsolate,
+      ),
+      penPreset1 = PlainStow.json(
+        'penPreset1',
+        PenPreset(size: 2, streamline: 0.3, color: Colors.black.toARGB32()),
+        fromJson: (json) => PenPreset.fromJson(json as Map<String, dynamic>),
+        volatile: !_isOnMainIsolate,
+      ),
+      penPreset2 = PlainStow.json(
+        'penPreset2',
+        PenPreset(size: 5, streamline: 0.5, color: Colors.black.toARGB32()),
+        fromJson: (json) => PenPreset.fromJson(json as Map<String, dynamic>),
+        volatile: !_isOnMainIsolate,
+      ),
+      penPreset3 = PlainStow.json(
+        'penPreset3',
+        PenPreset(size: 10, streamline: 0.7, color: Colors.black.toARGB32()),
+        fromJson: (json) => PenPreset.fromJson(json as Map<String, dynamic>),
         volatile: !_isOnMainIsolate,
       );
   final lastBackgroundPattern = PlainStow(

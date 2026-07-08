@@ -234,14 +234,17 @@ class _ToolbarState extends State<Toolbar> {
               .pen => PenModal(
                 getTool: () => Pen.currentPen,
                 setTool: widget.setTool,
+                onClose: () => this.toolOptionsType.value = .hide,
               ),
               .highlighter => PenModal(
                 getTool: () => Highlighter.currentHighlighter,
                 setTool: widget.setTool,
+                onClose: () => this.toolOptionsType.value = .hide,
               ),
               .pencil => PenModal(
                 getTool: () => Pencil.currentPencil,
                 setTool: widget.setTool,
+                onClose: () => this.toolOptionsType.value = .hide,
               ),
               .select => SelectionBar(
                 duplicateSelection: widget.duplicateSelection,
