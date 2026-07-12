@@ -38,6 +38,7 @@ import 'package:saber/data/extensions/change_notifier_extensions.dart';
 import 'package:saber/data/extensions/matrix4_extensions.dart';
 import 'package:saber/data/file_manager/file_manager.dart';
 import 'package:saber/data/nextcloud/saber_syncer.dart';
+import 'package:saber/data/ocr/ocr_service.dart';
 import 'package:saber/data/prefs.dart';
 import 'package:saber/data/tools/_tool.dart';
 import 'package:saber/data/tools/eraser.dart';
@@ -163,6 +164,7 @@ class EditorState extends State<Editor> {
   ValueNotifier<SavingState> savingState = ValueNotifier(SavingState.saved);
   Timer? _delayedSaveTimer;
   Timer? _watchServerTimer;
+  Timer? _ocrDebounce;
 
   // used to prevent accidentally drawing when pinch zooming
   var lastSeenPointerCount = 0;
@@ -185,6 +187,7 @@ class EditorState extends State<Editor> {
     DynamicMaterialApp.addFullscreenListener(_setState);
 
     _initAsync();
+    unawaited(OcrService.instance.ensureModelsReady());
     _assignKeybindings();
 
     super.initState();
@@ -663,7 +666,7 @@ class EditorState extends State<Editor> {
             strokes: [newStroke],
             images: [],
           ),
-        );
+        );_scheduleOcr(page.strokes);
       } else if (currentTool is Eraser) {
         final erased = (currentTool as Eraser).onDragEnd();
         if (stylusButtonWasPressed || stows.disableEraserAfterUse.value) {
@@ -721,6 +724,23 @@ class EditorState extends State<Editor> {
     if (shouldSave) autosaveAfterDelay();
   }
 
+  void _scheduleOcr(List<Stroke> strokes) {
+    _ocrDebounce?.cancel();
+    _ocrDebounce = Timer(const Duration(milliseconds: 500), () async {
+      if (strokes.isEmpty) return;
+      final text = await OcrService.instance.recognise(strokes);
+      if (!mounted) return;
+      if (text == null || text.isEmpty) return;
+      debugPrint('OCR: $text');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('OCR: $text'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    });
+  }
+
   void onInteractionEnd(ScaleEndDetails details) {
     // reset after 1ms to keep track of the same gesture only
     _lastSeenPointerCountTimer?.cancel();
@@ -771,6 +791,7 @@ class EditorState extends State<Editor> {
         offset: offset,
       ),
     );
+    
     // setState to update undo button
     setState(() {});
     autosaveAfterDelay();
@@ -1818,6 +1839,7 @@ class EditorState extends State<Editor> {
           }
         } else {
           _watchServerTimer?.cancel();
+          _ocrDebounce?.cancel();
           _watchServerTimer = null;
           if (coreInfo.readOnlyReason == .watchingServer) {
             coreInfo.readOnlyReason = null;

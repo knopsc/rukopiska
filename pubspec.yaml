@@ -48,6 +48,8 @@ dependencies:
 
   perfect_freehand: ^2.5.1
 
+  google_mlkit_digital_ink_recognition: ^0.15.0
+  
   path_provider: ^2.0.11
 
   flutter_secure_storage: ^10.0.0-beta.4

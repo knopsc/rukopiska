@@ -20,6 +20,13 @@ class Stroke {
   @protected
   final List<PointVector> points = [];
 
+  /// A read-only view of the stroke's points. 
+  ///
+  /// Exposed for external consumers (such as OCR integrations) that need
+  /// to inspect the stroke's geometry without mutating it. Prefer this
+  /// over accessing [points] directly outside of this class.
+  Iterable<PointVector> get pointsView => points;
+
   bool get isEmpty => points.isEmpty;
   int get length => points.length;
 
