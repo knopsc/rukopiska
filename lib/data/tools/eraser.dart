@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:saber/components/canvas/_stroke.dart';
+import 'package:saber/data/editor/canvas_text.dart';
 
 import 'package:saber/data/tools/_tool.dart';
 import 'package:sbn/tool_id.dart';
@@ -14,6 +15,7 @@ class Eraser extends Tool {
   late final double sqrSize = square(size);
 
   List<Stroke> _erased = [];
+  List<CanvasText> _erasedCanvasTexts = [];
 
   Eraser({this.size = 10});
 
@@ -40,6 +42,26 @@ class Eraser extends Tool {
   List<Stroke> onDragEnd() {
     final List<Stroke> erased = _erased;
     _erased = [];
+    return erased;
+  }
+
+  List<CanvasText> checkForOverlappingCanvasTexts(
+    Offset eraserPos,
+    List<CanvasText> canvasTexts,
+  ) {
+    final overlapping = canvasTexts
+        .where(
+          (canvasText) => canvasText.bounds.inflate(size).contains(eraserPos),
+        )
+        .where((canvasText) => !_erasedCanvasTexts.contains(canvasText))
+        .toList();
+    _erasedCanvasTexts.addAll(overlapping);
+    return overlapping;
+  }
+
+  List<CanvasText> takeErasedCanvasTexts() {
+    final erased = _erasedCanvasTexts;
+    _erasedCanvasTexts = [];
     return erased;
   }
 

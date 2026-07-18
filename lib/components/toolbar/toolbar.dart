@@ -16,6 +16,7 @@ import 'package:saber/components/toolbar/export_bar.dart';
 import 'package:saber/components/toolbar/pen_modal.dart';
 import 'package:saber/components/toolbar/selection_bar.dart';
 import 'package:saber/components/toolbar/size_picker.dart';
+import 'package:saber/components/toolbar/smart_pen_modal.dart';
 import 'package:saber/components/toolbar/toolbar_button.dart';
 import 'package:saber/data/editor/page.dart';
 import 'package:saber/data/extensions/color_extensions.dart';
@@ -44,6 +45,8 @@ class Toolbar extends StatefulWidget {
     required this.redo,
     required this.isRedoPossible,
     required this.toggleFingerDrawing,
+    required this.smartPenEnabled,
+    required this.toggleSmartPen,
     required this.pickPhoto,
     required this.paste,
     required this.duplicateSelection,
@@ -69,6 +72,8 @@ class Toolbar extends StatefulWidget {
   final bool isRedoPossible;
 
   final VoidCallback toggleFingerDrawing;
+  final bool smartPenEnabled;
+  final VoidCallback toggleSmartPen;
 
   final VoidCallback pickPhoto;
 
@@ -250,6 +255,7 @@ class _ToolbarState extends State<Toolbar> {
                 duplicateSelection: widget.duplicateSelection,
                 deleteSelection: widget.deleteSelection,
               ),
+              .smartPen => const SmartPenModal(),
             },
           );
         },
@@ -348,6 +354,28 @@ class _ToolbarState extends State<Toolbar> {
                 },
                 padding: buttonPadding,
                 child: UniIcon(Pen.currentPen.icon, size: 16),
+              ),
+              ToolbarIconButton(
+                tooltip: widget.smartPenEnabled
+                    ? 'Disable handwriting conversion'
+                    : 'Enable handwriting conversion',
+                selected: widget.smartPenEnabled,
+                enabled: !widget.readOnly,
+                onPressed: widget.toggleSmartPen,
+                padding: buttonPadding,
+                child: const Icon(Symbols.ink_pen),
+              ),
+              ToolbarIconButton(
+                tooltip: 'Smart pen text settings',
+                selected: toolOptionsType.value == .smartPen,
+                enabled: !widget.readOnly,
+                onPressed: () {
+                  toolOptionsType.value = toolOptionsType.value == .smartPen
+                      ? .hide
+                      : .smartPen;
+                },
+                padding: buttonPadding,
+                child: const Icon(Symbols.text_fields),
               ),
               ToolbarIconButton(
                 tooltip: t.editor.pens.pencil,
@@ -583,4 +611,4 @@ class _ToolbarState extends State<Toolbar> {
   }
 }
 
-enum ToolOptions { hide, pen, highlighter, pencil, select }
+enum ToolOptions { hide, pen, highlighter, pencil, select, smartPen }

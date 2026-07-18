@@ -10,6 +10,7 @@ import 'package:saber/components/canvas/_stroke.dart';
 import 'package:saber/components/canvas/image/editor_image.dart';
 import 'package:saber/components/canvas/inner_canvas.dart';
 import 'package:saber/components/canvas/pencil_shader.dart';
+import 'package:saber/data/editor/canvas_text.dart';
 import 'package:saber/data/editor/editor_exporter.dart';
 import 'package:saber/data/tools/laser_pointer.dart';
 import 'package:sbn/has_size.dart';
@@ -47,6 +48,7 @@ class EditorPage extends ChangeNotifier implements HasSize {
   final List<Stroke> strokes;
   final List<LaserStroke> laserStrokes;
   final List<EditorImage> images;
+  final List<CanvasText> canvasTexts;
   final QuillStruct quill;
 
   EditorImage? backgroundImage;
@@ -54,6 +56,7 @@ class EditorPage extends ChangeNotifier implements HasSize {
   bool get isEmpty =>
       strokes.isEmpty &&
       images.isEmpty &&
+      canvasTexts.isEmpty &&
       quill.controller.document.isEmpty() &&
       backgroundImage == null;
   bool get isNotEmpty => !isEmpty;
@@ -79,6 +82,9 @@ class EditorPage extends ChangeNotifier implements HasSize {
     }
     for (final image in images) {
       maxY = max(maxY, image.dstRect.bottom);
+    }
+    for (final canvasText in canvasTexts) {
+      maxY = max(maxY, canvasText.position.dy + canvasText.fontSize * 1.5);
     }
     if (!quill.controller.document.isEmpty()) {
       // this does not account for text that wraps to the next line
@@ -106,6 +112,7 @@ class EditorPage extends ChangeNotifier implements HasSize {
     double? height,
     List<Stroke>? strokes,
     List<EditorImage>? images,
+    List<CanvasText>? canvasTexts,
     QuillStruct? quill,
     this.backgroundImage,
   }) : assert(
@@ -116,6 +123,7 @@ class EditorPage extends ChangeNotifier implements HasSize {
        strokes = strokes ?? [],
        laserStrokes = [],
        images = images ?? [],
+       canvasTexts = canvasTexts ?? [],
        quill =
            quill ??
            QuillStruct(
@@ -148,6 +156,12 @@ class EditorPage extends ChangeNotifier implements HasSize {
         sbnPath: sbnPath,
         assetCache: assetCache,
       ),
+      canvasTexts:
+          (json['r'] as List?)
+              ?.cast<Map<String, dynamic>>()
+              .map(CanvasText.fromJson)
+              .toList() ??
+          [],
       quill: QuillStruct(
         controller: json['q'] != null
             ? QuillController(
@@ -176,6 +190,8 @@ class EditorPage extends ChangeNotifier implements HasSize {
       's': strokes.map((stroke) => stroke.toJson()).toList(),
     if (images.isNotEmpty)
       'i': images.map((image) => image.toJson(assets)).toList(),
+    if (canvasTexts.isNotEmpty)
+      'r': canvasTexts.map((canvasText) => canvasText.toJson()).toList(),
     if (!quill.controller.document.isEmpty())
       'q': quill.controller.document.toDelta().toJson(),
     if (backgroundImage != null) 'b': backgroundImage?.toJson(assets),
@@ -316,12 +332,14 @@ class EditorPage extends ChangeNotifier implements HasSize {
     Size? size,
     List<Stroke>? strokes,
     List<EditorImage>? images,
+    List<CanvasText>? canvasTexts,
     QuillStruct? quill,
     EditorImage? backgroundImage,
   }) => EditorPage(
     size: size ?? this.size,
     strokes: strokes ?? this.strokes,
     images: images ?? this.images,
+    canvasTexts: canvasTexts ?? this.canvasTexts,
     quill: quill ?? this.quill,
     backgroundImage: backgroundImage ?? this.backgroundImage,
   );

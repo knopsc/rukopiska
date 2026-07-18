@@ -1,6 +1,10 @@
+/// AI-generated wholely or partially with OpenAI Codex.
+library;
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:collapsible/collapsible.dart';
 import 'package:file_picker/file_picker.dart';
@@ -30,6 +34,7 @@ import 'package:saber/components/toolbar/color_bar.dart';
 import 'package:saber/components/toolbar/editor_bottom_sheet.dart';
 import 'package:saber/components/toolbar/editor_page_manager.dart';
 import 'package:saber/components/toolbar/toolbar.dart';
+import 'package:saber/data/editor/canvas_text.dart';
 import 'package:saber/data/editor/editor_core_info.dart';
 import 'package:saber/data/editor/editor_exporter.dart';
 import 'package:saber/data/editor/editor_history.dart';
@@ -39,6 +44,7 @@ import 'package:saber/data/extensions/matrix4_extensions.dart';
 import 'package:saber/data/file_manager/file_manager.dart';
 import 'package:saber/data/nextcloud/saber_syncer.dart';
 import 'package:saber/data/ocr/ocr_service.dart';
+import 'package:saber/data/ocr/smart_pen_settings.dart';
 import 'package:saber/data/prefs.dart';
 import 'package:saber/data/tools/_tool.dart';
 import 'package:saber/data/tools/eraser.dart';
@@ -98,6 +104,8 @@ class Editor extends StatefulWidget {
 }
 
 class EditorState extends State<Editor> {
+  static const _ocrIdleDelay = Duration(seconds: 2);
+
   final log = Logger('EditorState');
 
   late var coreInfo = EditorCoreInfo.placeholder;
@@ -165,6 +173,11 @@ class EditorState extends State<Editor> {
   Timer? _delayedSaveTimer;
   Timer? _watchServerTimer;
   Timer? _ocrDebounce;
+  final List<Stroke> _pendingOcrStrokes = [];
+  var _ocrInProgress = false;
+  var _isDrawing = false;
+  var _smartPenEnabled = true;
+  int? _pendingOcrPageIndex;
 
   // used to prevent accidentally drawing when pinch zooming
   var lastSeenPointerCount = 0;
@@ -187,7 +200,7 @@ class EditorState extends State<Editor> {
     DynamicMaterialApp.addFullscreenListener(_setState);
 
     _initAsync();
-    unawaited(OcrService.instance.ensureModelsReady());
+    unawaited(_prepareOcr());
     _assignKeybindings();
 
     super.initState();
@@ -367,6 +380,9 @@ class EditorState extends State<Editor> {
           for (final image in item.images) {
             coreInfo.pages[image.pageIndex].images.remove(image);
           }
+          coreInfo.pages[item.pageIndex].canvasTexts.removeWhere(
+            item.canvasTexts.contains,
+          );
           removeExcessPages();
 
         case .erase:
@@ -379,6 +395,21 @@ class EditorState extends State<Editor> {
             coreInfo.pages[image.pageIndex].images.add(image);
             image.newImage = true;
           }
+          coreInfo.pages[item.pageIndex].canvasTexts.addAll(item.canvasTexts);
+
+        case .replaceInkWithText:
+          final page = coreInfo.pages[item.pageIndex];
+          page.canvasTexts.removeWhere(item.canvasTexts.contains);
+          for (final stroke in item.strokes) {
+            page.insertStroke(stroke);
+          }
+          page.redrawStrokes();
+
+        case .restoreInkFromText:
+          final page = coreInfo.pages[item.pageIndex];
+          page.strokes.removeWhere(item.strokes.contains);
+          page.canvasTexts.addAll(item.canvasTexts);
+          page.redrawStrokes();
 
         case .deletePage:
           // make sure we already have a (blank/otherwise) page at this index
@@ -421,6 +452,9 @@ class EditorState extends State<Editor> {
               image.dstRect.bottom - item.offset!.bottom,
             );
           }
+          for (final canvasText in item.canvasTexts) {
+            canvasText.position -= Offset(item.offset!.left, item.offset!.top);
+          }
 
         case .quillChange:
           final quill = coreInfo.pages[item.pageIndex].quill;
@@ -456,6 +490,10 @@ class EditorState extends State<Editor> {
         undo(item.copyWith(type: .erase));
       case .erase:
         undo(item.copyWith(type: .draw));
+      case .replaceInkWithText:
+        undo(item.copyWith(type: .restoreInkFromText));
+      case .restoreInkFromText:
+        undo(item.copyWith(type: .replaceInkWithText));
       case .deletePage:
         undo(item.copyWith(type: .insertPage));
       case .insertPage:
@@ -559,6 +597,9 @@ class EditorState extends State<Editor> {
   }
 
   void onDrawStart(ScaleStartDetails details) {
+    _isDrawing = true;
+    _ocrDebounce?.cancel();
+
     final page = coreInfo.pages[dragPageIndex!];
     final position = page.renderBox!.globalToLocal(details.focalPoint);
     history.canRedo = false;
@@ -571,12 +612,18 @@ class EditorState extends State<Editor> {
         currentPressure,
       );
     } else if (currentTool is Eraser) {
-      for (final stroke in (currentTool as Eraser).checkForOverlappingStrokes(
+      final eraser = currentTool as Eraser;
+      for (final stroke in eraser.checkForOverlappingStrokes(
         position,
         page.strokes,
       )) {
         page.strokes.remove(stroke);
       }
+      page.canvasTexts.removeWhere(
+        eraser
+            .checkForOverlappingCanvasTexts(position, page.canvasTexts)
+            .contains,
+      );
       removeExcessPages();
     } else if (currentTool is Select) {
       final select = currentTool as Select;
@@ -612,12 +659,18 @@ class EditorState extends State<Editor> {
       (currentTool as Pen).onDragUpdate(position, currentPressure);
       page.redrawStrokes();
     } else if (currentTool is Eraser) {
-      for (final stroke in (currentTool as Eraser).checkForOverlappingStrokes(
+      final eraser = currentTool as Eraser;
+      for (final stroke in eraser.checkForOverlappingStrokes(
         position,
         page.strokes,
       )) {
         page.strokes.remove(stroke);
       }
+      page.canvasTexts.removeWhere(
+        eraser
+            .checkForOverlappingCanvasTexts(position, page.canvasTexts)
+            .contains,
+      );
       page.redrawStrokes();
       removeExcessPages();
     } else if (currentTool is Select) {
@@ -628,6 +681,9 @@ class EditorState extends State<Editor> {
         }
         for (final image in select.selectResult.images) {
           image.dstRect = image.dstRect.shift(offset);
+        }
+        for (final canvasText in select.selectResult.canvasTexts) {
+          canvasText.position += offset;
         }
         select.selectResult.path = select.selectResult.path.shift(offset);
       } else {
@@ -666,21 +722,25 @@ class EditorState extends State<Editor> {
             strokes: [newStroke],
             images: [],
           ),
-        );_scheduleOcr(page.strokes);
+        );
+        _scheduleOcr(newStroke);
       } else if (currentTool is Eraser) {
-        final erased = (currentTool as Eraser).onDragEnd();
+        final eraser = currentTool as Eraser;
+        final erased = eraser.onDragEnd();
+        final erasedCanvasTexts = eraser.takeErasedCanvasTexts();
         if (stylusButtonWasPressed || stows.disableEraserAfterUse.value) {
           // restore previous tool
           stylusButtonWasPressed = false;
           currentTool = _lastNonEraserTool;
         }
-        if (erased.isEmpty) return;
+        if (erased.isEmpty && erasedCanvasTexts.isEmpty) return;
         history.recordChange(
           EditorHistoryItem(
             type: .erase,
             pageIndex: dragPageIndex!,
             strokes: erased,
             images: [],
+            canvasTexts: erasedCanvasTexts,
           ),
         );
       } else if (currentTool is Select) {
@@ -703,7 +763,7 @@ class EditorState extends State<Editor> {
           );
         } else {
           shouldSave = false;
-          select.onDragEnd(page.strokes, page.images);
+          select.onDragEnd(page.strokes, page.images, page.canvasTexts);
 
           if (select.selectResult.isEmpty) {
             Select.currentSelect.unselect();
@@ -721,24 +781,249 @@ class EditorState extends State<Editor> {
       }
     });
 
+    _isDrawing = false;
+
     if (shouldSave) autosaveAfterDelay();
   }
 
-  void _scheduleOcr(List<Stroke> strokes) {
-    _ocrDebounce?.cancel();
-    _ocrDebounce = Timer(const Duration(milliseconds: 500), () async {
-      if (strokes.isEmpty) return;
-      final text = await OcrService.instance.recognise(strokes);
+  Future<void> _prepareOcr() async {
+    try {
+      await OcrService.instance.ensureModelsReady();
+    } catch (error, stackTrace) {
+      debugPrint('OCR model download failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      log.warning(
+        'Failed to prepare handwriting recognition',
+        error,
+        stackTrace,
+      );
       if (!mounted) return;
-      if (text == null || text.isEmpty) return;
-      debugPrint('OCR: $text');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('OCR: $text'),
-          duration: const Duration(seconds: 2),
+      _showOcrMessage('OCR model download failed: $error');
+    }
+  }
+
+  void _scheduleOcr(Stroke stroke) {
+    if (!_smartPenEnabled) return;
+    if (_pendingOcrPageIndex != null &&
+        _pendingOcrPageIndex != stroke.pageIndex) {
+      _pendingOcrStrokes.clear();
+    }
+    _pendingOcrPageIndex = stroke.pageIndex;
+    _pendingOcrStrokes.add(stroke);
+    _ocrDebounce?.cancel();
+    _ocrDebounce = Timer(_ocrIdleDelay, _recognisePendingStrokes);
+  }
+
+  Future<void> _recognisePendingStrokes() async {
+    if (_isDrawing || _ocrInProgress || _pendingOcrStrokes.isEmpty) return;
+
+    _ocrInProgress = true;
+    final strokes = List<Stroke>.of(_pendingOcrStrokes);
+    _pendingOcrStrokes.clear();
+
+    try {
+      final lines = _groupStrokesByLine(strokes);
+      final recognizedLines = <String>[];
+      var replacedAny = false;
+      for (final lineStrokes in lines) {
+        if (_isDrawing) break;
+        final text = await OcrService.instance.recognise(
+          lineStrokes,
+          shouldContinue: () => !_isDrawing,
+        );
+        if (!mounted) return;
+        if (text == null || text.trim().isEmpty) continue;
+        final recognizedText = text.trim();
+        recognizedLines.add(recognizedText);
+        replacedAny |= _replaceStrokesWithText(lineStrokes, recognizedText);
+      }
+      if (recognizedLines.isEmpty) {
+        _showOcrMessage('Handwriting was not recognized');
+        return;
+      }
+      final recognizedText = recognizedLines.join(' / ');
+      _showOcrMessage(
+        replacedAny
+            ? 'Recognized and replaced: $recognizedText'
+            : 'Recognized, but replacement failed: $recognizedText',
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Handwriting recognition failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      log.warning('Handwriting recognition failed', error, stackTrace);
+      if (mounted) _showOcrMessage('Recognition failed: $error');
+    } finally {
+      _ocrInProgress = false;
+      if (_pendingOcrStrokes.isNotEmpty) {
+        _ocrDebounce = Timer(_ocrIdleDelay, _recognisePendingStrokes);
+      }
+    }
+  }
+
+  List<List<Stroke>> _groupStrokesByLine(List<Stroke> strokes) {
+    final entries = <({Stroke stroke, Rect bounds})>[];
+    for (final stroke in strokes) {
+      final bounds = _getStrokeBounds([stroke]);
+      if (bounds != null) entries.add((stroke: stroke, bounds: bounds));
+    }
+    if (entries.isEmpty) return [];
+    final heights = entries.map((entry) => entry.bounds.height).toList()
+      ..sort();
+    final referenceHeight = heights[(heights.length * 0.75).floor()];
+    final threshold = max(28.0, referenceHeight * 1.15);
+    final centers = entries.map((entry) => entry.bounds.center.dy).toList()
+      ..sort();
+    final lineCenters = <double>[centers.first];
+    for (final center in centers.skip(1)) {
+      if (center - lineCenters.last > threshold) lineCenters.add(center);
+    }
+    final groups = List.generate(lineCenters.length, (_) => <Stroke>[]);
+    for (final entry in entries) {
+      var nearest = 0;
+      for (var index = 1; index < lineCenters.length; index++) {
+        if ((entry.bounds.center.dy - lineCenters[index]).abs() <
+            (entry.bounds.center.dy - lineCenters[nearest]).abs()) {
+          nearest = index;
+        }
+      }
+      groups[nearest].add(entry.stroke);
+    }
+    return groups.where((group) => group.isNotEmpty).toList();
+  }
+
+  bool _replaceStrokesWithText(List<Stroke> strokes, String text) {
+    if (!_smartPenEnabled || strokes.isEmpty || text.isEmpty) return false;
+    final pageIndex = strokes.first.pageIndex;
+    if (strokes.any((stroke) => stroke.pageIndex != pageIndex)) return false;
+
+    final page = coreInfo.pages[pageIndex];
+    final existingStrokes = strokes.where(page.strokes.contains).toList();
+    if (existingStrokes.isEmpty) return false;
+
+    final bounds = _getStrokeBounds(existingStrokes);
+    if (bounds == null) return false;
+    final settings = SmartPenSettings.instance;
+    final words = text.split(RegExp(r'\s+')).where((word) => word.isNotEmpty);
+    final measurementStyle = TextStyle(
+      color: existingStrokes.first.color,
+      fontSize: 100,
+      fontFamily: settings.fontFamily,
+      fontFamilyFallback: const ['Dekko'],
+      height: 1,
+      fontWeight: settings.bold ? FontWeight.bold : FontWeight.normal,
+      fontStyle: settings.italic ? FontStyle.italic : FontStyle.normal,
+    );
+    final measurementPainter = TextPainter(
+      text: TextSpan(text: text, style: measurementStyle),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout();
+    final measurementBounds = _getGlyphBounds(measurementPainter, text);
+    final fontSize = settings.automaticSize
+        ? (100 *
+                  bounds.height *
+                  settings.sizeScale /
+                  max(1, measurementBounds.height))
+              .clamp(14.0, 140.0)
+        : settings.fixedSize;
+    final textStyle = measurementStyle.copyWith(fontSize: fontSize);
+    final linePainter = TextPainter(
+      text: TextSpan(text: text, style: textStyle),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout();
+    final lineGlyphBounds = _getGlyphBounds(linePainter, text);
+    final textTop = bounds.top - lineGlyphBounds.top;
+    final wordPainters = [
+      for (final word in words)
+        TextPainter(
+          text: TextSpan(text: word, style: textStyle),
+          textDirection: TextDirection.ltr,
+          maxLines: 1,
+        )..layout(),
+    ];
+    if (wordPainters.isEmpty) return false;
+    final wordsWidth = wordPainters.fold<double>(
+      0,
+      (width, painter) => width + painter.width,
+    );
+    final gap = wordPainters.length > 1
+        ? max(6.0, (bounds.width - wordsWidth) / (wordPainters.length - 1))
+        : 0.0;
+    var left = bounds.left;
+    final canvasTexts = <CanvasText>[];
+    for (var index = 0; index < wordPainters.length; index++) {
+      final painter = wordPainters[index];
+      canvasTexts.add(
+        CanvasText(
+          text: painter.text!.toPlainText(),
+          position: Offset(left, textTop),
+          fontSize: fontSize,
+          color: existingStrokes.first.color,
+          fontFamily: settings.fontFamily,
+          bold: settings.bold,
+          italic: settings.italic,
+        ),
+      );
+      left += painter.width + gap;
+    }
+
+    setState(() {
+      page.strokes.removeWhere(existingStrokes.contains);
+      page.canvasTexts.addAll(canvasTexts);
+      history.recordChange(
+        EditorHistoryItem(
+          type: .replaceInkWithText,
+          pageIndex: pageIndex,
+          strokes: existingStrokes,
+          images: const [],
+          canvasTexts: canvasTexts,
         ),
       );
     });
+    page.redrawStrokes();
+    autosaveAfterDelay();
+    return true;
+  }
+
+  Rect? _getStrokeBounds(List<Stroke> strokes) {
+    final points = strokes.expand((stroke) => stroke.pointsView).toList();
+    if (points.isEmpty) return null;
+    var left = points.first.x;
+    var top = points.first.y;
+    var right = points.first.x;
+    var bottom = points.first.y;
+    for (final point in points.skip(1)) {
+      left = min(left, point.x);
+      top = min(top, point.y);
+      right = max(right, point.x);
+      bottom = max(bottom, point.y);
+    }
+    return Rect.fromLTRB(left, top, right, bottom);
+  }
+
+  Rect _getGlyphBounds(TextPainter painter, String text) {
+    final boxes = painter.getBoxesForSelection(
+      TextSelection(baseOffset: 0, extentOffset: text.length),
+    );
+    if (boxes.isEmpty) return Offset.zero & painter.size;
+    var bounds = boxes.first.toRect();
+    for (final box in boxes.skip(1)) {
+      bounds = bounds.expandToInclude(box.toRect());
+    }
+    return bounds;
+  }
+
+  void _showOcrMessage(String message, {Duration? duration}) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: duration ?? const Duration(seconds: 2),
+      ),
+    );
   }
 
   void onInteractionEnd(ScaleEndDetails details) {
@@ -791,7 +1076,7 @@ class EditorState extends State<Editor> {
         offset: offset,
       ),
     );
-    
+
     // setState to update undo button
     setState(() {});
     autosaveAfterDelay();
@@ -1463,6 +1748,16 @@ class EditorState extends State<Editor> {
             if (mounted) setState(() {});
           },
           currentTool: currentTool,
+          smartPenEnabled: _smartPenEnabled,
+          toggleSmartPen: () {
+            setState(() => _smartPenEnabled = !_smartPenEnabled);
+            _showOcrMessage(
+              _smartPenEnabled ? 'Smart pen enabled' : 'Smart pen disabled',
+            );
+            if (_smartPenEnabled) return;
+            _ocrDebounce?.cancel();
+            _pendingOcrStrokes.clear();
+          },
           duplicateSelection: () {
             final select = currentTool as Select;
             if (!select.doneSelecting) return;
@@ -1471,6 +1766,7 @@ class EditorState extends State<Editor> {
               final page = coreInfo.pages[select.selectResult.pageIndex];
               final strokes = select.selectResult.strokes;
               final images = select.selectResult.images;
+              final canvasTexts = select.selectResult.canvasTexts;
 
               const duplicationFeedbackOffset = Offset(25, -25);
 
@@ -1483,13 +1779,21 @@ class EditorState extends State<Editor> {
                   ..id = coreInfo.nextImageId++
                   ..dstRect.shift(duplicationFeedbackOffset);
               }).toList();
+              final duplicatedCanvasTexts = canvasTexts
+                  .map(
+                    (canvasText) =>
+                        canvasText.copy(offset: duplicationFeedbackOffset),
+                  )
+                  .toList();
 
               page.strokes.addAll(duplicatedStrokes);
               page.images.addAll(duplicatedImages);
+              page.canvasTexts.addAll(duplicatedCanvasTexts);
 
               select.selectResult = select.selectResult.copyWith(
                 strokes: duplicatedStrokes,
                 images: duplicatedImages,
+                canvasTexts: duplicatedCanvasTexts,
                 path: select.selectResult.path.shift(duplicationFeedbackOffset),
               );
 
@@ -1499,6 +1803,7 @@ class EditorState extends State<Editor> {
                   pageIndex: select.selectResult.pageIndex,
                   strokes: duplicatedStrokes,
                   images: duplicatedImages,
+                  canvasTexts: duplicatedCanvasTexts,
                 ),
               );
               autosaveAfterDelay();
@@ -1514,6 +1819,7 @@ class EditorState extends State<Editor> {
               final page = coreInfo.pages[select.selectResult.pageIndex];
               final strokes = select.selectResult.strokes;
               final images = select.selectResult.images;
+              final canvasTexts = select.selectResult.canvasTexts;
 
               for (final stroke in strokes) {
                 page.strokes.remove(stroke);
@@ -1521,15 +1827,17 @@ class EditorState extends State<Editor> {
               for (final image in images) {
                 page.images.remove(image);
               }
+              page.canvasTexts.removeWhere(canvasTexts.contains);
 
               select.unselect();
 
               history.recordChange(
                 EditorHistoryItem(
                   type: .erase,
-                  pageIndex: strokes.first.pageIndex,
+                  pageIndex: select.selectResult.pageIndex,
                   strokes: strokes,
                   images: images,
+                  canvasTexts: canvasTexts,
                 ),
               );
               autosaveAfterDelay();
@@ -2090,6 +2398,7 @@ class EditorState extends State<Editor> {
 
     _delayedSaveTimer?.cancel();
     _watchServerTimer?.cancel();
+    _ocrDebounce?.cancel();
     _lastSeenPointerCountTimer?.cancel();
 
     _removeKeybindings();

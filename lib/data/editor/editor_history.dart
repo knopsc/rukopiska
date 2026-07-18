@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:saber/components/canvas/_stroke.dart';
 import 'package:saber/components/canvas/image/editor_image.dart';
+import 'package:saber/data/editor/canvas_text.dart';
 import 'package:saber/data/editor/page.dart';
 import 'package:sbn/canvas_background_pattern.dart';
 import 'package:sbn/change.dart';
@@ -144,6 +145,7 @@ class EditorHistoryItem {
     required this.pageIndex,
     required this.strokes,
     required this.images,
+    this.canvasTexts = const [],
     this.offset,
     this.page,
     this.quillChange,
@@ -182,6 +184,7 @@ class EditorHistoryItem {
   final int pageIndex;
   final List<Stroke> strokes;
   final List<EditorImage> images;
+  final List<CanvasText> canvasTexts;
   final Rect? offset;
   final EditorPage? page;
   final DocChange? quillChange;
@@ -193,6 +196,7 @@ class EditorHistoryItem {
     int? pageIndex,
     List<Stroke>? strokes,
     List<EditorImage>? images,
+    List<CanvasText>? canvasTexts,
     Rect? offset,
     EditorPage? page,
     DocChange? quillChange,
@@ -204,6 +208,7 @@ class EditorHistoryItem {
       pageIndex: pageIndex ?? this.pageIndex,
       strokes: strokes ?? this.strokes,
       images: images ?? this.images,
+      canvasTexts: canvasTexts ?? this.canvasTexts,
       offset: offset ?? this.offset,
       page: page ?? this.page,
       quillChange: quillChange ?? this.quillChange,
@@ -217,6 +222,8 @@ class EditorHistoryItem {
 enum EditorHistoryItemType {
   draw,
   erase,
+  replaceInkWithText,
+  restoreInkFromText,
   deletePage,
   insertPage,
   move,

@@ -51,6 +51,7 @@ class CanvasPainter extends CustomPainter {
 
     _drawHighlighterStrokes(canvas, canvasRect);
     _drawNonHighlighterStrokes(canvas);
+    _drawCanvasTexts(canvas);
     for (final stroke in laserStrokes) _drawLaserStroke(canvas, stroke);
     _drawCurrentStroke(canvas);
     _drawDetectedShape(canvas);
@@ -68,6 +69,7 @@ class CanvasPainter extends CustomPainter {
         // Check for any other changes
         invert != oldDelegate.invert ||
         strokes.length != oldDelegate.strokes.length ||
+        page.canvasTexts.length != oldDelegate.page.canvasTexts.length ||
         currentSelection != oldDelegate.currentSelection ||
         primaryColor != oldDelegate.primaryColor ||
         page != oldDelegate.page ||
@@ -75,6 +77,30 @@ class CanvasPainter extends CustomPainter {
         pageIndex != oldDelegate.pageIndex ||
         totalPages != oldDelegate.totalPages ||
         currentScale != oldDelegate.currentScale;
+  }
+
+  void _drawCanvasTexts(Canvas canvas) {
+    for (final canvasText in page.canvasTexts) {
+      final selected =
+          currentSelection?.canvasTexts.contains(canvasText) ?? false;
+      final painter = TextPainter(
+        text: TextSpan(
+          text: canvasText.text,
+          style: canvasText.textStyle.copyWith(
+            color: selected
+                ? Color.lerp(
+                    canvasText.color.withInversion(invert),
+                    primaryColor,
+                    0.5,
+                  )
+                : canvasText.color.withInversion(invert),
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      painter.paint(canvas, canvasText.position);
+    }
   }
 
   void _drawHighlighterStrokes(Canvas canvas, Rect canvasRect) {

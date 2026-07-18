@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:saber/components/canvas/_stroke.dart';
 import 'package:saber/components/canvas/image/editor_image.dart';
+import 'package:saber/data/editor/canvas_text.dart';
 import 'package:saber/data/tools/_tool.dart';
 import 'package:sbn/tool_id.dart';
 
@@ -18,6 +19,7 @@ class Select extends Tool {
     pageIndex: -1,
     strokes: const [],
     images: const [],
+    canvasTexts: const [],
     path: Path(),
   );
   var doneSelecting = false;
@@ -55,6 +57,7 @@ class Select extends Tool {
       pageIndex: pageIndex,
       strokes: [],
       images: [],
+      canvasTexts: [],
       path: Path(),
     );
     selectResult.path.moveTo(position.dx, position.dy);
@@ -67,7 +70,11 @@ class Select extends Tool {
 
   /// Adds the indices of any [strokes] that are inside the selection area
   /// to [selectResult.indices].
-  void onDragEnd(List<Stroke> strokes, List<EditorImage> images) {
+  void onDragEnd(
+    List<Stroke> strokes,
+    List<EditorImage> images,
+    List<CanvasText> canvasTexts,
+  ) {
     selectResult.path.close();
     doneSelecting = true;
 
@@ -87,6 +94,16 @@ class Select extends Tool {
       final percentInside = rectPercentInside(selectResult.path, image.dstRect);
       if (percentInside >= minPercentInside) {
         selectResult.images.add(image);
+      }
+    }
+
+    for (final canvasText in canvasTexts) {
+      final percentInside = rectPercentInside(
+        selectResult.path,
+        canvasText.bounds,
+      );
+      if (percentInside >= minPercentInside) {
+        selectResult.canvasTexts.add(canvasText);
       }
     }
   }
@@ -126,29 +143,33 @@ class SelectResult {
   int pageIndex;
   final List<Stroke> strokes;
   final List<EditorImage> images;
+  final List<CanvasText> canvasTexts;
   Path path;
 
   SelectResult({
     required this.pageIndex,
     required this.strokes,
     required this.images,
+    required this.canvasTexts,
     required this.path,
   });
 
   bool get isEmpty {
-    return strokes.isEmpty && images.isEmpty;
+    return strokes.isEmpty && images.isEmpty && canvasTexts.isEmpty;
   }
 
   SelectResult copyWith({
     int? pageIndex,
     List<Stroke>? strokes,
     List<EditorImage>? images,
+    List<CanvasText>? canvasTexts,
     Path? path,
   }) {
     return SelectResult(
       pageIndex: pageIndex ?? this.pageIndex,
       strokes: strokes ?? this.strokes,
       images: images ?? this.images,
+      canvasTexts: canvasTexts ?? this.canvasTexts,
       path: path ?? this.path,
     );
   }
