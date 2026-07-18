@@ -43,6 +43,7 @@ import 'package:saber/data/extensions/change_notifier_extensions.dart';
 import 'package:saber/data/extensions/matrix4_extensions.dart';
 import 'package:saber/data/file_manager/file_manager.dart';
 import 'package:saber/data/nextcloud/saber_syncer.dart';
+import 'package:saber/data/ocr/handwriting_layout.dart';
 import 'package:saber/data/ocr/ocr_service.dart';
 import 'package:saber/data/ocr/smart_pen_settings.dart';
 import 'package:saber/data/prefs.dart';
@@ -822,26 +823,35 @@ class EditorState extends State<Editor> {
     _pendingOcrStrokes.clear();
 
     try {
-      final lines = _groupStrokesByLine(strokes);
-      final recognizedLines = <String>[];
-      var replacedAny = false;
-      for (final lineStrokes in lines) {
-        if (_isDrawing) break;
-        final text = await OcrService.instance.recognise(
-          lineStrokes,
-          shouldContinue: () => !_isDrawing,
-        );
-        if (!mounted) return;
-        if (text == null || text.trim().isEmpty) continue;
-        final recognizedText = text.trim();
-        recognizedLines.add(recognizedText);
-        replacedAny |= _replaceStrokesWithText(lineStrokes, recognizedText);
-      }
-      if (recognizedLines.isEmpty) {
+      final text = await OcrService.instance.recognise(
+        strokes,
+        shouldContinue: () => !_isDrawing,
+      );
+      if (!mounted) return;
+      if (text == null || text.trim().isEmpty) {
         _showOcrMessage('Handwriting was not recognized');
         return;
       }
-      final recognizedText = recognizedLines.join(' / ');
+      final lines = groupHandwritingLines(strokes, (stroke) {
+        return _getStrokeBounds([stroke]);
+      });
+      final recognizedLines = distributeRecognizedText(
+        text,
+        lines.map((line) => line.bounds.width).toList(),
+      );
+      var replacedAny = false;
+      for (var index = 0; index < lines.length; index++) {
+        final recognizedLine = recognizedLines[index];
+        if (recognizedLine.isEmpty) continue;
+        replacedAny |= _replaceStrokesWithText(
+          lines[index].items,
+          recognizedLine,
+          referenceHeight: lines[index].referenceHeight,
+        );
+      }
+      final recognizedText = recognizedLines
+          .where((line) => line.isNotEmpty)
+          .join(' / ');
       _showOcrMessage(
         replacedAny
             ? 'Recognized and replaced: $recognizedText'
@@ -860,38 +870,11 @@ class EditorState extends State<Editor> {
     }
   }
 
-  List<List<Stroke>> _groupStrokesByLine(List<Stroke> strokes) {
-    final entries = <({Stroke stroke, Rect bounds})>[];
-    for (final stroke in strokes) {
-      final bounds = _getStrokeBounds([stroke]);
-      if (bounds != null) entries.add((stroke: stroke, bounds: bounds));
-    }
-    if (entries.isEmpty) return [];
-    final heights = entries.map((entry) => entry.bounds.height).toList()
-      ..sort();
-    final referenceHeight = heights[(heights.length * 0.75).floor()];
-    final threshold = max(28.0, referenceHeight * 1.15);
-    final centers = entries.map((entry) => entry.bounds.center.dy).toList()
-      ..sort();
-    final lineCenters = <double>[centers.first];
-    for (final center in centers.skip(1)) {
-      if (center - lineCenters.last > threshold) lineCenters.add(center);
-    }
-    final groups = List.generate(lineCenters.length, (_) => <Stroke>[]);
-    for (final entry in entries) {
-      var nearest = 0;
-      for (var index = 1; index < lineCenters.length; index++) {
-        if ((entry.bounds.center.dy - lineCenters[index]).abs() <
-            (entry.bounds.center.dy - lineCenters[nearest]).abs()) {
-          nearest = index;
-        }
-      }
-      groups[nearest].add(entry.stroke);
-    }
-    return groups.where((group) => group.isNotEmpty).toList();
-  }
-
-  bool _replaceStrokesWithText(List<Stroke> strokes, String text) {
+  bool _replaceStrokesWithText(
+    List<Stroke> strokes,
+    String text, {
+    required double referenceHeight,
+  }) {
     if (!_smartPenEnabled || strokes.isEmpty || text.isEmpty) return false;
     final pageIndex = strokes.first.pageIndex;
     if (strokes.any((stroke) => stroke.pageIndex != pageIndex)) return false;
@@ -921,7 +904,7 @@ class EditorState extends State<Editor> {
     final measurementBounds = _getGlyphBounds(measurementPainter, text);
     final fontSize = settings.automaticSize
         ? (100 *
-                  bounds.height *
+                  referenceHeight *
                   settings.sizeScale /
                   max(1, measurementBounds.height))
               .clamp(14.0, 140.0)
